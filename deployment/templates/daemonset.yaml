@@ -144,7 +144,7 @@ spec:
         {{- if or .Values.arguments .Values.debugDump.enabled }}
         args:
         {{- range $.Values.arguments }}
-        - {{ . }}
+        - {{ . | quote }}
         {{- end }}
         {{- if .Values.debugDump.enabled }}
         - "--dump-enabled"
