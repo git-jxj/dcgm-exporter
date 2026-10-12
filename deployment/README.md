@@ -176,6 +176,16 @@ When upgrading from older chart values, the default `arguments: []` may remove
 the rendered container `args:` stanza and roll the DaemonSet. The exporter still
 uses its built-in runtime defaults when no arguments are set.
 
+### Kubernetes Pod Labels
+
+Set `kubernetes.enablePodLabels: true` to include labels from GPU-consuming pods.
+`kubernetes.podLabelAllowlistRegex` matches the original Kubernetes label keys.
+Keys are normalized to Prometheus label names; when keys collide after normalization,
+all values are retained in original-key sort order using the first unused
+`_conflictN` suffix. Existing normalized names are reserved before assigning suffixes.
+For example, `app.kubernetes.io/name` and `app_kubernetes_io_name` become
+`app_kubernetes_io_name` and `app_kubernetes_io_name_conflict1`, respectively.
+
 ### Scrape Timeout Configuration
 
 Kubernetes pod metadata enrichment can add scrape latency on dense GPU or MIG nodes. The chart exposes the exporter HTTP server timeouts and the ServiceMonitor scrape budget so they can be kept aligned.

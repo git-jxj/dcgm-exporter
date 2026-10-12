@@ -117,8 +117,11 @@ Rules:
   Kubernetes options are enabled and RBAC permits the required reads.
 - DRA and virtual GPU behavior must be explicitly enabled and tested or
   documented as a prerequisite-dependent path.
-- Pod label allowlist regex values filter which pod labels are included in
-  metrics; an empty allowlist means include all labels.
+- Pod label allowlist regex values match original Kubernetes label keys; an
+  empty allowlist means include all labels. Label names are then normalized for
+  Prometheus. If multiple keys normalize to the same name, original keys are
+  sorted and later values receive the first unused `_conflictN` suffix (starting
+  at 1). Existing normalized names are reserved before suffixes are assigned.
 - Local GPU k3d validation requires Linux, NVIDIA driver, Docker, k3d,
   kubectl, Helm, NVIDIA Container Toolkit, and a usable GPU.
 

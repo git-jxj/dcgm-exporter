@@ -47,6 +47,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	podresourcesapi "k8s.io/kubelet/pkg/apis/podresources/v1"
@@ -800,6 +801,21 @@ func TestProcessPodMapper_WithLabels(t *testing.T) {
 				"invalid_label_key": "another-value",
 			},
 		},
+		{
+			name: "gpu-pod-2",
+			labels: map[string]string{
+				"pci.bus.id":           "qualified",
+				"pci_bus_id":           "plain",
+				"pci_bus_id_conflict1": "existing-suffix",
+				"pod_label_pci_bus_id": "existing-prefix",
+			},
+			wantLabels: map[string]string{
+				"pci_bus_id_conflict1":           "existing-suffix",
+				"pci_bus_id_conflict2":           "plain",
+				"pod_label_pci_bus_id":           "existing-prefix",
+				"pod_label_pci_bus_id_conflict1": "qualified",
+			},
+		},
 	}
 
 	// Create fake Kubernetes clientset with pods containing labels
@@ -821,7 +837,7 @@ func TestProcessPodMapper_WithLabels(t *testing.T) {
 	socketPath := tmpDir + "/kubelet.sock"
 
 	server := grpc.NewServer()
-	gpus := []string{"gpu-uuid-0", "gpu-uuid-1"}
+	gpus := []string{"gpu-uuid-0", "gpu-uuid-1", "gpu-uuid-2"}
 	podresourcesapi.RegisterPodResourcesListerServer(server,
 		testutils.NewMockPodResourcesServer(appconfig.NvidiaResourceName, gpus))
 	cleanupServer := testutils.StartMockServer(t, server, socketPath)
@@ -3292,4 +3308,74 @@ func TestGetGRPCConnRejectsConnectionAfterStop(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Nil(t, conn)
+}
+
+func TestPodMapperCreatePodInfoSanitizedLabelCollisions(t *testing.T) {
+	tests := []struct {
+		name      string
+		labels    map[string]string
+		allowlist []string
+		want      map[string]string
+	}{
+		{
+			name: "preserve both normalized labels",
+			labels: map[string]string{
+				"app.kubernetes.io/name": "qualified",
+				"app_kubernetes_io_name": "plain",
+			},
+			want: map[string]string{
+				"app_kubernetes_io_name":           "qualified",
+				"app_kubernetes_io_name_conflict1": "plain",
+			},
+		},
+		{
+			name: "reserve labels that resemble generated suffixes",
+			labels: map[string]string{
+				"team-name":           "dash",
+				"team.name":           "dot",
+				"team_name":           "underscore",
+				"team_name_conflict1": "existing-first",
+				"team_name_conflict2": "existing-second",
+			},
+			want: map[string]string{
+				"team_name":           "dash",
+				"team_name_conflict1": "existing-first",
+				"team_name_conflict2": "existing-second",
+				"team_name_conflict3": "dot",
+				"team_name_conflict4": "underscore",
+			},
+		},
+		{
+			name: "apply allowlist to original labels before resolving collisions",
+			labels: map[string]string{
+				"app.kubernetes.io/name": "qualified",
+				"app_kubernetes_io_name": "plain",
+			},
+			allowlist: []string{`^app\.kubernetes\.io/name$`},
+			want:      map[string]string{"app_kubernetes_io_name": "qualified"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+			require.NoError(t, indexer.Add(&v1.Pod{ObjectMeta: metav1.ObjectMeta{
+				Name: "gpu-pod", Namespace: "default", Labels: tc.labels,
+			}}))
+			mapper := &PodMapper{
+				Config:           &appconfig.Config{KubernetesEnablePodLabels: true},
+				podLister:        corelisters.NewPodLister(indexer),
+				labelFilterCache: newLabelFilterCache(tc.allowlist, 100),
+			}
+			pod := &podresourcesapi.PodResources{Name: "gpu-pod", Namespace: "default"}
+			container := &podresourcesapi.ContainerResources{Name: "gpu-container"}
+			for range 50 {
+				info := mapper.createPodInfo(pod, container)
+				require.Equal(t, tc.want, info.Labels)
+				metric := collector.Metric{UUID: "UUID", Attributes: map[string]string{}}
+				copyPodLabels(&metric, info.Labels, dcgm.FE_GPU)
+				require.Equal(t, tc.want, metric.Labels)
+			}
+		})
+	}
 }

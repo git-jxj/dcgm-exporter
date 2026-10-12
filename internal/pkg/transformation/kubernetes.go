@@ -1330,12 +1330,35 @@ func (p *PodMapper) createPodInfo(pod *podresourcesapi.PodResources, container *
 			uid = string(podObj.UID)
 
 			if p.Config.KubernetesEnablePodLabels {
-				for k, v := range podObj.Labels {
-					if !p.shouldIncludeLabel(k) {
+				keys := make([]string, 0, len(podObj.Labels))
+				for k := range podObj.Labels {
+					if p.shouldIncludeLabel(k) {
+						keys = append(keys, k)
+					}
+				}
+				slices.Sort(keys)
+
+				// Reserve every normalized name before assigning suffixes, including
+				// real labels whose names already resemble generated conflict names.
+				var collidingKeys []string
+				for _, k := range keys {
+					name := utils.SanitizeLabelName(k)
+					if _, exists := labels[name]; exists {
+						collidingKeys = append(collidingKeys, k)
 						continue
 					}
-					sanitizedKey := utils.SanitizeLabelName(k)
-					labels[sanitizedKey] = v
+					labels[name] = podObj.Labels[k]
+				}
+
+				for _, k := range collidingKeys {
+					base := utils.SanitizeLabelName(k)
+					for i := 1; ; i++ {
+						name := fmt.Sprintf("%s_conflict%d", base, i)
+						if _, exists := labels[name]; !exists {
+							labels[name] = podObj.Labels[k]
+							break
+						}
+					}
 				}
 			}
 		}
